@@ -1,30 +1,36 @@
 import os
+import sys
+import argparse
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-import textwrap   # dodany import
+import textwrap
 
-# --- Configuration ---
-xml_path = "JPK-29-AN-202501.xml"  # Path to the JPK_FA(4) XML file (update this as needed)
+# --- Konfiguracja argumentów wiersza poleceń ---
+parser = argparse.ArgumentParser(description='Generowanie PDF faktur z pliku JPK-29-AN XML')
+parser.add_argument('xml_path', help='Ścieżka do pliku XML (JPK-29-AN)')
+args = parser.parse_args()
+xml_path = args.xml_path
+
 output_dir = "faktury"
-seller_bank_account = "Santander (SWIFT: WBKPPLPP), 84 1090 1098 0000 0001 5295 9691"  # Seller’s bank account number
+seller_bank_account = "Santander (SWIFT: WBKPPLPP), 84 1090 1098 0000 0001 5295 9691"  # Numer rachunku bankowego sprzedawcy
 
-# Parse XML with namespace handling
+# Parsowanie XML z uwzględnieniem przestrzeni nazw
 tree = ET.parse(xml_path)
 root = tree.getroot()
 ns = {
     "jp": "http://jpk.mf.gov.pl/wzor/2022/02/17/02171/",
     "etd": "http://crd.gov.pl/xml/schematy/dziedzinowe/mf/2018/08/24/eD/DefinicjeTypy/"
 }
-# Extract seller's name, address, and NIP from the first invoice or Podmiot1 (assuming one seller for all invoices)
+
+# Ekstrakcja danych sprzedawcy z sekcji Podmiot1
 seller_name = None
 seller_address = None
 seller_nip = None
 
-# Option 1: Use Podmiot1 section for seller info if present
 podmiot = root.find("jp:Podmiot1", ns)
 if podmiot is not None:
     nip_elem = podmiot.find("jp:IdentyfikatorPodmiotu/jp:NIP", ns)
@@ -42,7 +48,7 @@ if podmiot is not None:
         city = addr_elem.find("etd:Miejscowosc", ns)
         postcode = addr_elem.find("etd:KodPocztowy", ns)
         addr_parts = []
-        if street is not None: 
+        if street is not None:
             addr_parts.append(street.text + (" " + bld.text if bld is not None else "") + ("/" + unit.text if unit is not None else ""))
         if postcode is not None and city is not None:
             addr_parts.append(postcode.text + " " + city.text)
@@ -50,7 +56,7 @@ if podmiot is not None:
         if country is not None and country.text and country.text.upper() != "PL":
             seller_address += ", " + country.text
 
-# Jeśli Podmiot1 nie jest dostępny, użyj pól z pierwszej faktury
+# Jeśli Podmiot1 nie jest dostępny, pobieramy dane ze pierwszej faktury
 invoices = []
 for faktura in root.findall("jp:Faktura", ns):
     inv_number = faktura.find("jp:P_2A", ns).text
@@ -78,7 +84,7 @@ for faktura in root.findall("jp:Faktura", ns):
     invoices.append({
         "number": inv_number,
         "date": issue_date,
-        "date_sell": sell_date, 
+        "date_sell": sell_date,
         "due_date": due_date,
         "buyer_name": buyer_name,
         "buyer_addr": buyer_addr,
@@ -125,7 +131,7 @@ for inv in invoices:
     pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', 'DejaVuSans-Bold.ttf'))
 
     c = canvas.Canvas(pdf_path, pagesize=A4)
-    width, height = A4  # 595x842 punktów
+    width, height = A4
 
     c.setFont("DejaVuSans", 10)
 
@@ -136,7 +142,7 @@ for inv in invoices:
         seller_name,
         seller_address,
         f"NIP: {seller_nip}",
-        "",
+        f"",
         f"Numer rachunku bankowego:",
         f"{seller_bank_account}"
     ]
@@ -147,11 +153,9 @@ for inv in invoices:
 
     # Sekcja górna prawa: Dane nabywcy
     c.drawString(320, y_start, "Nabywca:")
-    # Zawijanie pola buyer_name na dwie linie
     buyer_name_lines = textwrap.wrap(inv["buyer_name"], width=36) if inv["buyer_name"] else [""]
     if len(buyer_name_lines) < 2:
         buyer_name_lines.append("")
-    # Zawijanie pola buyer_addr na dwie linie
     buyer_addr_lines = textwrap.wrap(inv["buyer_addr"], width=36) if inv["buyer_addr"] else [""]
     if len(buyer_addr_lines) < 2:
         buyer_addr_lines.append("")
@@ -172,16 +176,17 @@ for inv in invoices:
     c.drawString(50, header_y - 30, f"Data dostawy towarów/wykonania usługi: {inv['date_sell']}")
     if inv["due_date"]:
         c.drawString(50, header_y - 45, f"Termin płatności: {inv['due_date']}")
+        c.drawString(50, header_y - 60, "Forma płatności: przelew")
 
     # Nagłówek tabeli pozycji
-    table_y = header_y - 75
+    table_y = header_y - 105
     c.setFont("DejaVuSans-Bold", 10)
     c.drawString(50, table_y, "Opis towaru/usługi")
     c.drawString(250, table_y, "Ilość")
     c.drawString(300, table_y, "Jedn.")
     c.drawString(350, table_y, "Netto")
-    c.drawString(420, table_y, "VAT")
-    c.drawString(470, table_y, "Brutto")
+    c.drawString(420, table_y, "VAT 23%")
+    c.drawString(480, table_y, "Brutto")
     c.setFont("DejaVuSans", 10)
     line_y = table_y - 15
     for item in inv["lines"]:
@@ -199,7 +204,7 @@ for inv in invoices:
     totals_y = line_y - 10
     c.setFont("DejaVuSans-Bold", 10)
     c.drawString(300, totals_y, "Suma netto PLN:")
-    c.drawString(300, totals_y - 15, "Suma VAT PLN:")
+    c.drawString(300, totals_y - 15, "Suma VAT 23% PLN:")
     c.drawString(300, totals_y - 30, "Suma brutto PLN:")
     c.setFont("DejaVuSans", 10)
     c.drawRightString(540, totals_y, f"{float(inv['net_total']):.2f}")
