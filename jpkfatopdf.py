@@ -12,6 +12,8 @@ import textwrap
 # --- Konfiguracja argumentów wiersza poleceń ---
 parser = argparse.ArgumentParser(description='Generowanie PDF faktur z pliku JPK-29-AN XML')
 parser.add_argument('xml_path', help='Ścieżka do pliku XML (JPK-29-AN)')
+parser.add_argument('--output_mode', choices=['separate', 'single'], default='separate',
+                    help="Tryb generowania PDF: 'separate' - osobne pliki, 'single' - wszystkie faktury w jednym pliku")
 args = parser.parse_args()
 xml_path = args.xml_path
 
@@ -122,19 +124,13 @@ for line in root.findall("jp:FakturaWiersz", ns):
 
 os.makedirs(output_dir, exist_ok=True)
 
-for inv in invoices:
-    inv_num = inv["number"]
-    pdf_filename = f"Faktura_{inv_num.replace('/', '_')}.pdf"
-    pdf_path = os.path.join(output_dir, pdf_filename)
+# Rejestracja czcionek (robimy to raz, niezależnie od trybu)
+pdfmetrics.registerFont(TTFont('DejaVuSans', 'DejaVuSans.ttf'))
+pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', 'DejaVuSans-Bold.ttf'))
 
-    pdfmetrics.registerFont(TTFont('DejaVuSans', 'DejaVuSans.ttf'))
-    pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', 'DejaVuSans-Bold.ttf'))
-
-    c = canvas.Canvas(pdf_path, pagesize=A4)
+def draw_invoice(c, inv, seller_name, seller_address, seller_nip, seller_bank_account):
     width, height = A4
-
     c.setFont("DejaVuSans", 10)
-
     # Sekcja górna lewa: Dane sprzedawcy
     y_start = height - 50
     c.drawString(50, y_start, "Sprzedawca:")
@@ -142,9 +138,9 @@ for inv in invoices:
         seller_name,
         seller_address,
         f"NIP: {seller_nip}",
-        f"",
-        f"Numer rachunku bankowego:",
-        f"{seller_bank_account}"
+        "",
+        "Numer rachunku bankowego:",
+        seller_bank_account
     ]
     y = y_start - 15
     for line in seller_info_lines:
@@ -170,7 +166,7 @@ for inv in invoices:
     # Nagłówek faktury (numer i daty)
     header_y = min(y, y_b) - 20
     c.setFont("DejaVuSans-Bold", 12)
-    c.drawString(50, header_y, f"Faktura VAT {inv_num}")
+    c.drawString(50, header_y, f"Faktura VAT {inv['number']}")
     c.setFont("DejaVuSans", 10)
     c.drawString(50, header_y - 15, f"Data wystawienia: {inv['date']}")
     c.drawString(50, header_y - 30, f"Data dostawy towarów/wykonania usługi: {inv['date_sell']}")
@@ -211,7 +207,24 @@ for inv in invoices:
     c.drawRightString(540, totals_y - 15, f"{float(inv['vat_total']):.2f}")
     c.drawRightString(540, totals_y - 30, f"{float(inv['gross_total']):.2f}")
 
-    c.showPage()
-    c.save()
+# Generowanie plików PDF w zależności od wybranego trybu
+if args.output_mode == 'separate':
+    for inv in invoices:
+        inv_num = inv["number"]
+        pdf_filename = f"Faktura_{inv_num.replace('/', '_')}.pdf"
+        pdf_path = os.path.join(output_dir, pdf_filename)
 
-print(f"Generated {len(invoices)} invoice PDFs in folder '{output_dir}'.")
+        c = canvas.Canvas(pdf_path, pagesize=A4)
+        draw_invoice(c, inv, seller_name, seller_address, seller_nip, seller_bank_account)
+        c.showPage()
+        c.save()
+    print(f"Wygenerowano {len(invoices)} faktur w osobnych plikach PDF w folderze '{output_dir}'.")
+else:  # tryb single
+    pdf_filename = "Faktury.pdf"
+    pdf_path = os.path.join(output_dir, pdf_filename)
+    c = canvas.Canvas(pdf_path, pagesize=A4)
+    for inv in invoices:
+        draw_invoice(c, inv, seller_name, seller_address, seller_nip, seller_bank_account)
+        c.showPage()
+    c.save()
+    print(f"Wygenerowano 1 plik PDF zawierający {len(invoices)} faktur w folderze '{output_dir}'.")
